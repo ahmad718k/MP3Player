@@ -1023,8 +1023,11 @@ static bool decodeOneStreamingFrame(const uint8_t *frame,
             unsigned bitsUsed = 0;
             uint32_t first24 = mainBR.peek(24);
 
+            /* Stage22: hard-limit Huffman decoding to this exact part2_3 region. */
+            MP3BitReader huffBR(virtualMain, virtualBytes, mainBR.bitsRead(), huffBits);
+
             bool ok = MP3Huffman::decodeGranule(
-                mainBR,
+                huffBR,
                 huffBits,
                 g.big_values,
                 g.table_select[0],
@@ -1070,14 +1073,12 @@ static bool decodeOneStreamingFrame(const uint8_t *frame,
                 memset(spectral, 0, sizeof(gSpectral[ch]));
 
                 size_t part23End = blockStart + g.part2_3_length;
-                if (mainBR.bitsRead() < part23End) {
-                    mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));
-                } else if (mainBR.bitsRead() > part23End) {
-                    USBSerial.printf(
-                        "FRAME %u GR%u CH%u: concealment boundary overrun\n",
-                        frameNo, grn, ch);
+                if (huffBR.bitsRead() > part23End) {
+                    USBSerial.printf("FRAME %u GR%u CH%u: INTERNAL HUFFMAN LIMIT VIOLATION\n", frameNo, grn, ch);
                     return false;
                 }
+                if (mainBR.bitsRead() < part23End)
+                    mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));
 
                 requantizeMpeg1(spectral, g, sf, xr);
                 continue;
@@ -1091,8 +1092,8 @@ static bool decodeOneStreamingFrame(const uint8_t *frame,
              * one.
              */
             size_t part23End = blockStart + g.part2_3_length;
-            if (mainBR.bitsRead() > part23End) {
-                USBSerial.printf("FRAME %u GR%u CH%u: part2_3 boundary overrun\n",
+            if (huffBR.bitsRead() > part23End) {
+                USBSerial.printf("FRAME %u GR%u CH%u: INTERNAL HUFFMAN LIMIT VIOLATION\n",
                                  frameNo, grn, ch);
                 return false;
             }

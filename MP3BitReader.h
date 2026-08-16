@@ -7,6 +7,9 @@
 class MP3BitReader {
 public:
     MP3BitReader(const uint8_t *data, size_t size);
+    MP3BitReader(const uint8_t *data, size_t size, size_t startBit, size_t bitLimit);
+    void setBitLimit(size_t bitLimit);
+    size_t bitLimit() const;
 
     uint32_t read(unsigned n);
     uint32_t peek(unsigned n);
