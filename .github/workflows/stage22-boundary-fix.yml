@@ -1,0 +1,54 @@
+name: Stage22 boundary fix
+on:
+  push:
+    branches: [ main ]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: ${{ !contains(github.event.head_commit.message, 'Stage22 boundary fix applied') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply Stage22 hard part2_3 boundary
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('MP3BitReader.h')
+          s = p.read_text()
+          s = s.replace('    MP3BitReader(const uint8_t *data, size_t size);\n', '    MP3BitReader(const uint8_t *data, size_t size);\n    MP3BitReader(const uint8_t *data, size_t size, size_t startBit, size_t bitLimit);\n    void setBitLimit(size_t bitLimit);\n    size_t bitLimit() const;\n')
+          p.write_text(s)
+          p = Path('MP3BitReader.cpp')
+          s = p.read_text()
+          s = s.replace(': data_(data), size_(size), bitpos_(0) {}', ': data_(data), size_(size), bitpos_(0), limitBits_(size * 8u) {}\n\nMP3BitReader::MP3BitReader(const uint8_t *data, size_t size, size_t startBit, size_t bitLimit)\n    : data_(data), size_(size), bitpos_(startBit), limitBits_(startBit + bitLimit)\n{\n    if (limitBits_ > size_ * 8u) limitBits_ = size_ * 8u;\n    if (bitpos_ > limitBits_) bitpos_ = limitBits_;\n}\n\nvoid MP3BitReader::setBitLimit(size_t bitLimit) {\n    size_t lim = bitpos_ + bitLimit;\n    if (lim > size_ * 8u) lim = size_ * 8u;\n    limitBits_ = lim;\n    if (bitpos_ > limitBits_) bitpos_ = limitBits_;\n}\n\nsize_t MP3BitReader::bitLimit() const { return limitBits_; }')
+          s = s.replace('return bitpos_ + n <= size_ * 8u;', 'return bitpos_ + n <= limitBits_;')
+          s = s.replace('else bitpos_ = size_ * 8u;', 'else bitpos_ = limitBits_;')
+          s = s.replace('size_t MP3BitReader::bitsLeft() const { return size_ * 8u - bitpos_; }', 'size_t MP3BitReader::bitsLeft() const { return limitBits_ - bitpos_; }')
+          s = s.replace('    size_t bitpos_;\n};', '    size_t bitpos_;\n    size_t limitBits_;\n};')
+          p.write_text(s)
+          p = Path('MP3Decoder.cpp')
+          s = p.read_text()
+          old = '''            bool ok = MP3Huffman::decodeGranule(\n                mainBR,\n                huffBits,'''
+          new = '''            /* Stage22: hard-limit Huffman decoding to this exact part2_3 region. */\n            MP3BitReader huffBR(virtualMain, virtualBytes, mainBR.bitsRead(), huffBits);\n\n            bool ok = MP3Huffman::decodeGranule(\n                huffBR,\n                huffBits,'''
+          if old not in s: raise SystemExit('decoder Huffman call not found')
+          s = s.replace(old, new, 1)
+          old = '''                size_t part23End = blockStart + g.part2_3_length;\n                if (mainBR.bitsRead() < part23End) {\n                    mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));\n                } else if (mainBR.bitsRead() > part23End) {\n                    USBSerial.printf(\n                        "FRAME %u GR%u CH%u: concealment boundary overrun\\n",\n                        frameNo, grn, ch);\n                    return false;\n                }\n'''
+          new = '''                size_t part23End = blockStart + g.part2_3_length;\n                if (huffBR.bitsRead() > part23End) {\n                    USBSerial.printf("FRAME %u GR%u CH%u: INTERNAL HUFFMAN LIMIT VIOLATION\\n", frameNo, grn, ch);\n                    return false;\n                }\n                if (mainBR.bitsRead() < part23End)\n                    mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));\n'''
+          if old not in s: raise SystemExit('decoder concealment boundary block not found')
+          s = s.replace(old, new, 1)
+          old = '''            size_t part23End = blockStart + g.part2_3_length;\n            if (mainBR.bitsRead() > part23End) {\n                USBSerial.printf("FRAME %u GR%u CH%u: part2_3 boundary overrun\\n",\n                                 frameNo, grn, ch);\n                return false;\n            }\n            if (mainBR.bitsRead() < part23End)\n                mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));\n'''
+          new = '''            size_t part23End = blockStart + g.part2_3_length;\n            if (huffBR.bitsRead() > part23End) {\n                USBSerial.printf("FRAME %u GR%u CH%u: INTERNAL HUFFMAN LIMIT VIOLATION\\n",\n                                 frameNo, grn, ch);\n                return false;\n            }\n            if (mainBR.bitsRead() < part23End)\n                mainBR.skip((unsigned)(part23End - mainBR.bitsRead()));\n'''
+          if old not in s: raise SystemExit('decoder normal boundary block not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MP3BitReader.h MP3BitReader.cpp MP3Decoder.cpp
+          git diff --cached --check
+          git commit -m "Stage22 boundary fix applied"
+          git push
+          rm -f .github/workflows/stage22-boundary-fix.yml
+          git add .github/workflows/stage22-boundary-fix.yml
+          git commit -m "Remove temporary Stage22 workflow"
+          git push
