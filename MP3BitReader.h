@@ -23,6 +23,7 @@ private:
     const uint8_t *data_;
     size_t size_;
     size_t bitpos_;
+    size_t limitBits_;
 };
 
 #endif
